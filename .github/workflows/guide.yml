@@ -1,0 +1,101 @@
+name: EPG guide
+
+on:
+  schedule:
+    # Every six hours, offset off the hour so we are not in the busy window.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two runs race for the Pages deployment.
+concurrency:
+  group: epg-guide
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate guide
+        env:
+          XTREAM_HOST: ${{ secrets.XTREAM_HOST }}
+          XTREAM_USER: ${{ secrets.XTREAM_USER }}
+          XTREAM_PASS: ${{ secrets.XTREAM_PASS }}
+        run: |
+          set -euo pipefail
+          test -n "$XTREAM_HOST" || { echo "::error::missing secret XTREAM_HOST"; exit 1; }
+          test -n "$XTREAM_USER" || { echo "::error::missing secret XTREAM_USER"; exit 1; }
+          test -n "$XTREAM_PASS" || { echo "::error::missing secret XTREAM_PASS"; exit 1; }
+          # --no-m3u is not optional here: the playlist embeds the provider
+          # username and password in every stream URL and must never be published.
+          python3 teamguide.py \
+            --xtream "$XTREAM_HOST" \
+            --username "$XTREAM_USER" \
+            --password "$XTREAM_PASS" \
+            --id-mode slot \
+            --cache-dir .cache \
+            --no-m3u \
+            --out-dir out
+
+      - name: Refuse to publish credentials
+        run: |
+          set -euo pipefail
+          if grep -rIilE 'password=|username=|/live/' out/; then
+            echo "::error::generated output references provider credentials - not publishing"
+            exit 1
+          fi
+          echo "clean: no credentials or stream URLs in out/"
+
+      - name: Sanity check guide
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("out/guide.xml").getroot()
+          channels = root.findall("channel")
+          programmes = root.findall("programme")
+          ids = {c.get("id") for c in channels}
+          orphans = [p for p in programmes if p.get("channel") not in ids]
+          enhanced = sorted(c.get("id") for c in channels if (c.get("id") or "").startswith("tg."))
+
+          print("channels=%d unique=%d programmes=%d orphans=%d enhanced=%d"
+                % (len(channels), len(ids), len(programmes), len(orphans), len(enhanced)))
+          print("enhanced ids: %s" % ", ".join(enhanced[:8]))
+
+          if not programmes:
+              sys.exit("guide has no programmes")
+          if orphans:
+              sys.exit("guide has programmes for undeclared channels")
+          if len(enhanced) < 10:
+              sys.exit("only %d enhanced channels, expected the event slots" % len(enhanced))
+          PY
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

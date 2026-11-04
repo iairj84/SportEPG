@@ -1,0 +1,20 @@
+# Generated output - never commit
+out/
+playlist.m3u
+guide.xml
+
+# ESPN day caches
+cache/
+.cache/
+
+# Local credentials - never commit
+teamguide.env
+.env
+.env.*
+
+# SSH helper used for deployment
+.askpass.sh
+
+# Python
+__pycache__/
+*.pyc
