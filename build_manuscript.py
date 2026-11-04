@@ -287,7 +287,7 @@ OPERATE = """\
 | --- | --- |
 | Scheduled run | hourly at `:17`; an unchanged guide is not republished |
 | Run now | Actions → EPG guide → Run workflow |
-| Change the horizon | `--days-ahead` in the workflow (default 14) |
+| Change the horizon | `--days-ahead` (default 2) and `--days-back` (default 1); a slot is named for the game it airs today, so a long horizon publishes programmes the channel will never show |
 | Change the leagues | `--leagues` (default `auto`: inferred from the channel names; `all` or an explicit list also work) |
 | Rotate the provider password | update the `XTREAM_PASS` secret only |
 | Add a team alias | `--aliases '{"NYK": "NY"}'`; applied only after real matching fails |

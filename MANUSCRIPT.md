@@ -838,8 +838,14 @@ def main(argv=None):
                     help="'auto' (default) infers the leagues from the "
                          "channel names; 'all' or a comma list of: "
                          + ", ".join(sorted(LEAGUES)))
-    ap.add_argument("--days-back", type=int, default=2)
-    ap.add_argument("--days-ahead", type=int, default=14)
+    ap.add_argument("--days-back", type=int, default=1,
+                    help="days of finished games to keep; the provider renames "
+                         "its slots daily, so long history has nothing to show")
+    ap.add_argument("--days-ahead", type=int, default=2,
+                    help="days ahead to cover; a slot is named for the game it "
+                         "airs today, so a long horizon invents programmes the "
+                         "channel will never show and costs a fetch per day per "
+                         "league")
     ap.add_argument("--aliases", default="", help="JSON {token: espn-abbreviation}")
     ap.add_argument("--cache-dir", default="cache")
     ap.add_argument("--no-m3u", action="store_true", help="do not write playlist.m3u")
@@ -1568,7 +1574,7 @@ never overridden by a slot code.
 | --- | --- |
 | Scheduled run | hourly at `:17`; an unchanged guide is not republished |
 | Run now | Actions → EPG guide → Run workflow |
-| Change the horizon | `--days-ahead` in the workflow (default 14) |
+| Change the horizon | `--days-ahead` (default 2) and `--days-back` (default 1); a slot is named for the game it airs today, so a long horizon publishes programmes the channel will never show |
 | Change the leagues | `--leagues` (default `auto`: inferred from the channel names; `all` or an explicit list also work) |
 | Rotate the provider password | update the `XTREAM_PASS` secret only |
 | Add a team alias | `--aliases '{"NYK": "NY"}'`; applied only after real matching fails |
@@ -1634,7 +1640,7 @@ stale and must be regenerated rather than edited.
 
 | File | Bytes | SHA-256 (first 16) |
 | --- | --- | --- |
-| `teamguide.py` | 32089 | `5874e908f449b91f` |
+| `teamguide.py` | 32529 | `8d7f969995e3a0ec` |
 | `.github/workflows/guide.yml` | 6474 | `71eb73502795afc7` |
 | `test/smoke.py` | 14778 | `9495bb3f6701097f` |
 | `.gitignore` | 232 | `05c7ad361ccd3924` |
