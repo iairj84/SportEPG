@@ -37,9 +37,10 @@ GitHub, and it keeps working when nothing of ours is running.
    | `XTREAM_USER` | provider username |
    | `XTREAM_PASS` | provider password |
 
-4. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
-5. **Actions → EPG guide → Run workflow** to do the first build without waiting
-   for the schedule.
+4. **Actions → EPG guide → Run workflow** to do the first build without waiting
+   for the schedule. The run also creates the `gh-pages` branch Pages serves.
+5. **Settings → Pages → Build and deployment → Source: Deploy from a branch**,
+   then **Branch: `gh-pages`**, folder **`/ (root)`**, and **Save**.
 
 The guide then lives at:
 
@@ -75,6 +76,11 @@ Assign once, and tomorrow's rename lands on the same id.
   days, resetting that clock, so the repository can stay public and free instead
   of moving to a paid plan just to host Pages from a private repository. If the
   job ever fails, the run goes red while the guide still publishes.
+- Publishing writes the `gh-pages` branch rather than calling the Pages
+  deployment API. Each run force-replaces that branch with a single commit
+  holding `guide.xml` and an empty `.nojekyll`, so it never accumulates history
+  and never waits on a deployment queue that can wedge. The Pages source must be
+  "Deploy from a branch" on `gh-pages`; "GitHub Actions" publishes nothing.
 - Pages on a **private** repository needs a paid plan. Public is fine here
   because the guide carries no credentials.
 - The guide still contains whatever the provider's XMLTV supplies for channels

@@ -161,7 +161,7 @@ LAYOUT = """\
 <repo>/
 ├── teamguide.py                 the tool (stdlib only)
 ├── test/smoke.py                assertions, incl. real provider channel names
-├── .github/workflows/guide.yml  scheduled generation + Pages deploy
+├── .github/workflows/guide.yml  scheduled generation + gh-pages publish
 ├── .gitignore                   keeps caches, output and credentials out of git
 ├── GITHUB.md                    short operator notes
 ├── MANUSCRIPT.md                this file
@@ -204,10 +204,12 @@ Assumes a GitHub account and provider credentials already exist.
    These are consumed as environment variables by the workflow. They are never
    written to a file, never echoed, and are masked in logs.
 
-4. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
+4. **Actions → EPG guide → Run workflow.** Do not wait for the schedule; verify
+   the first build by hand. The run also creates the `gh-pages` branch Pages
+   serves.
 
-5. **Actions → EPG guide → Run workflow.** Do not wait for the schedule; verify
-   the first build by hand.
+5. **Settings → Pages → Build and deployment → Source: Deploy from a branch**
+   → Branch `gh-pages`, folder `/ (root)` → **Save**.
 
 The guide is then served at:
 
@@ -299,7 +301,7 @@ TROUBLE = """\
 | Build fails at "Refuse to publish credentials" | something in the output matched a credential pattern | find what produced it; almost always `--no-m3u` was dropped. Do not delete the step |
 | Build fails "guide has no programmes" | ESPN returned nothing for the window | check the panel is reachable and `XTREAM_HOST` includes the scheme |
 | Build fails "only N enhanced channels" | event channels were not recognised | compare the names against the split cases in `test/smoke.py` |
-| Pages URL 404 | Pages source not set to GitHub Actions, or no deploy has run yet | fix the setting, then re-run the workflow |
+| Pages URL 404 | Pages source is not "Deploy from a branch" on `gh-pages`, or no run has published yet | set the source, then re-run the workflow |
 | Guide publishes but the grid is unchanged | the player is still pointing at the old EPG source | add the Pages URL and refresh the guide |
 | Event channel still shows "No information" | its EPG is not assigned | assign it once; confirm the id is `tg.`-prefixed |
 | Wrong team shown on a channel | token resolved in the wrong league | verify per-league resolution first; only then add an alias |

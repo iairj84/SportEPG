@@ -99,7 +99,7 @@ untouched.
 <repo>/
 ├── teamguide.py                 the tool (stdlib only)
 ├── test/smoke.py                assertions, incl. real provider channel names
-├── .github/workflows/guide.yml  scheduled generation + Pages deploy
+├── .github/workflows/guide.yml  scheduled generation + gh-pages publish
 ├── .gitignore                   keeps caches, output and credentials out of git
 ├── GITHUB.md                    short operator notes
 ├── MANUSCRIPT.md                this file
@@ -140,10 +140,12 @@ Assumes a GitHub account and provider credentials already exist.
    These are consumed as environment variables by the workflow. They are never
    written to a file, never echoed, and are masked in logs.
 
-4. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
+4. **Actions → EPG guide → Run workflow.** Do not wait for the schedule; verify
+   the first build by hand. The run also creates the `gh-pages` branch Pages
+   serves.
 
-5. **Actions → EPG guide → Run workflow.** Do not wait for the schedule; verify
-   the first build by hand.
+5. **Settings → Pages → Build and deployment → Source: Deploy from a branch**
+   → Branch `gh-pages`, folder `/ (root)` → **Save**.
 
 The guide is then served at:
 
@@ -946,10 +948,8 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# Never let two runs race for the Pages deployment.
+# Never let two runs race for the publish.
 concurrency:
   group: epg-guide
   cancel-in-progress: false
@@ -957,6 +957,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Publishing commits to the gh-pages branch, so this job needs contents
+    # write. It is the only write the build has; nothing else is writable.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -1022,10 +1026,29 @@ jobs:
               sys.exit("only %d enhanced channels, expected the event slots" % len(enhanced))
           PY
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: out
+      - name: Publish to the gh-pages branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Pages builds straight from this branch. Publishing through the Pages
+          # deployment API instead can leave a first deployment sitting in
+          # progress forever, which leaves the site unpublished with no error to
+          # act on. A branch push always completes.
+          stage=$(mktemp -d)
+          cp out/guide.xml "$stage/guide.xml"
+          : > "$stage/.nojekyll"
+          cd "$stage"
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git commit -q -m "guide: $(date -u +%FT%TZ)"
+          # Force: the branch holds exactly one commit, replaced on every run.
+          git push -q --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            gh-pages
+          echo "published guide.xml to the gh-pages branch of ${GITHUB_REPOSITORY}"
 
   # GitHub disables scheduled workflows in *public* repositories after 60 days
   # with no repository activity. Pages on a private repository avoids that rule
@@ -1063,17 +1086,6 @@ jobs:
             git pull --rebase --quiet origin main
             git push origin HEAD:main
           }
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
 ````
 
 ### `test/smoke.py`
@@ -1466,7 +1478,7 @@ an EPG that is irrelevant; for a same-day change, dispatch manually.
 | Build fails at "Refuse to publish credentials" | something in the output matched a credential pattern | find what produced it; almost always `--no-m3u` was dropped. Do not delete the step |
 | Build fails "guide has no programmes" | ESPN returned nothing for the window | check the panel is reachable and `XTREAM_HOST` includes the scheme |
 | Build fails "only N enhanced channels" | event channels were not recognised | compare the names against the split cases in `test/smoke.py` |
-| Pages URL 404 | Pages source not set to GitHub Actions, or no deploy has run yet | fix the setting, then re-run the workflow |
+| Pages URL 404 | Pages source is not "Deploy from a branch" on `gh-pages`, or no run has published yet | set the source, then re-run the workflow |
 | Guide publishes but the grid is unchanged | the player is still pointing at the old EPG source | add the Pages URL and refresh the guide |
 | Event channel still shows "No information" | its EPG is not assigned | assign it once; confirm the id is `tg.`-prefixed |
 | Wrong team shown on a channel | token resolved in the wrong league | verify per-league resolution first; only then add an alias |
@@ -1510,6 +1522,6 @@ stale and must be regenerated rather than edited.
 | File | Bytes | SHA-256 (first 16) |
 | --- | --- | --- |
 | `teamguide.py` | 30154 | `e5d828f37be1827b` |
-| `.github/workflows/guide.yml` | 4748 | `337660680db28f26` |
+| `.github/workflows/guide.yml` | 5654 | `043d22346e1b9660` |
 | `test/smoke.py` | 12639 | `5b2f6799023cbd8c` |
 | `.gitignore` | 232 | `05c7ad361ccd3924` |

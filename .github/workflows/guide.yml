@@ -8,10 +8,8 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# Never let two runs race for the Pages deployment.
+# Never let two runs race for the publish.
 concurrency:
   group: epg-guide
   cancel-in-progress: false
@@ -19,6 +17,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Publishing commits to the gh-pages branch, so this job needs contents
+    # write. It is the only write the build has; nothing else is writable.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -84,10 +86,29 @@ jobs:
               sys.exit("only %d enhanced channels, expected the event slots" % len(enhanced))
           PY
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: out
+      - name: Publish to the gh-pages branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Pages builds straight from this branch. Publishing through the Pages
+          # deployment API instead can leave a first deployment sitting in
+          # progress forever, which leaves the site unpublished with no error to
+          # act on. A branch push always completes.
+          stage=$(mktemp -d)
+          cp out/guide.xml "$stage/guide.xml"
+          : > "$stage/.nojekyll"
+          cd "$stage"
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git commit -q -m "guide: $(date -u +%FT%TZ)"
+          # Force: the branch holds exactly one commit, replaced on every run.
+          git push -q --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            gh-pages
+          echo "published guide.xml to the gh-pages branch of ${GITHUB_REPOSITORY}"
 
   # GitHub disables scheduled workflows in *public* repositories after 60 days
   # with no repository activity. Pages on a private repository avoids that rule
@@ -125,14 +146,3 @@ jobs:
             git pull --rebase --quiet origin main
             git push origin HEAD:main
           }
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
