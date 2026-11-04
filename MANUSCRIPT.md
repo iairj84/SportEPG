@@ -1027,6 +1027,43 @@ jobs:
         with:
           path: out
 
+  # GitHub disables scheduled workflows in *public* repositories after 60 days
+  # with no repository activity. Pages on a private repository avoids that rule
+  # but needs a paid plan, so keep the repository public and reset the clock
+  # instead: at most one trivial commit every 40 days, nothing to remember.
+  keepalive:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reset the inactivity clock
+        run: |
+          set -euo pipefail
+          if [ -f .keepalive ]; then
+            if last=$(date -u -d "$(cat .keepalive)" +%s 2>/dev/null); then
+              age=$(( ( $(date -u +%s) - last ) / 86400 ))
+              echo "keepalive last reset ${age} day(s) ago"
+              if [ "$age" -lt 40 ]; then
+                echo "nothing to do"
+                exit 0
+              fi
+            fi
+          fi
+          date -u +%F > .keepalive
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .keepalive
+          git commit -m "chore: reset the inactivity clock so the schedule stays enabled"
+          # A concurrent commit would reject the push; rebase once and retry.
+          git push origin HEAD:main || {
+            git pull --rebase --quiet origin main
+            git push origin HEAD:main
+          }
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -1473,6 +1510,6 @@ stale and must be regenerated rather than edited.
 | File | Bytes | SHA-256 (first 16) |
 | --- | --- | --- |
 | `teamguide.py` | 30154 | `e5d828f37be1827b` |
-| `.github/workflows/guide.yml` | 3294 | `72ba57fb0772a819` |
+| `.github/workflows/guide.yml` | 4748 | `337660680db28f26` |
 | `test/smoke.py` | 12639 | `5b2f6799023cbd8c` |
 | `.gitignore` | 232 | `05c7ad361ccd3924` |

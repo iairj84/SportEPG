@@ -69,6 +69,12 @@ Assign once, and tomorrow's rename lands on the same id.
 
 - Scheduled workflows can start late (usually minutes, occasionally longer).
   Irrelevant for EPG; run the workflow manually if you want it now.
+- GitHub disables scheduled workflows in a **public** repository after 60 days
+  with no repository activity, which would silently stop the guide. The
+  `keepalive` job writes `.keepalive` and commits it when it is older than 40
+  days, resetting that clock, so the repository can stay public and free instead
+  of moving to a paid plan just to host Pages from a private repository. If the
+  job ever fails, the run goes red while the guide still publishes.
 - Pages on a **private** repository needs a paid plan. Public is fine here
   because the guide carries no credentials.
 - The guide still contains whatever the provider's XMLTV supplies for channels
