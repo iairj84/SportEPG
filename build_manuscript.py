@@ -148,6 +148,12 @@ leagues that can host both teams of a matchup. A provider relabelling its
 categories for the season — "Baseball" instead of "MLB" — needs no
 configuration, because nothing keys on the label.
 
+Two leagues can legitimately own the same pair — `SF @ SEA` is both the
+Giants/Mariners and the 49ers/Seahawks — so the choice is not left to table
+order. An exact abbreviation beats a loose or fuzzy one, a category that names the
+sport or league breaks the remaining tie, and the tighter index wins after that.
+Every conflict is logged, so a wrong call is visible instead of silent.
+
 **4. Fetch ESPN per day.** The scoreboard endpoint rejects date *ranges* with
 HTTP 400; it must be queried one day at a time. Days in the past are cached for
 a week, future days for an hour, and requests run in a small thread pool.
@@ -324,6 +330,10 @@ LIMITS = """\
 
 - **It enhances; it does not replace.** The provider's guide remains the source
   for every channel that is not an event channel.
+- **A name-only channel can still be ambiguous.** When two leagues have a game for
+  the same pairing on the same day and the category says nothing useful, one of
+  them has to win: the tool prefers the literal match and logs the conflict rather
+  than pretending the choice was certain.
 - **ESPN is the only sport source.** Leagues it does not carry cannot be
   resolved, and the tool leaves those channels untouched rather than guessing.
 - **Only the guide is hosted.** The playlist is generated locally when needed

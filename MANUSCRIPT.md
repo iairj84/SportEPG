@@ -88,6 +88,12 @@ leagues that can host both teams of a matchup. A provider relabelling its
 categories for the season — "Baseball" instead of "MLB" — needs no
 configuration, because nothing keys on the label.
 
+Two leagues can legitimately own the same pair — `SF @ SEA` is both the
+Giants/Mariners and the 49ers/Seahawks — so the choice is not left to table
+order. An exact abbreviation beats a loose or fuzzy one, a category that names the
+sport or league breaks the remaining tie, and the tighter index wins after that.
+Every conflict is logged, so a wrong call is visible instead of silent.
+
 **4. Fetch ESPN per day.** The scoreboard endpoint rejects date *ranges* with
 HTTP 400; it must be queried one day at a time. Days in the past are cached for
 a week, future days for an hour, and requests run in a small thread pool.
@@ -505,13 +511,45 @@ def build_team_index(league_keys, cache_dir):
     return per_league
 
 
-def resolve_team(token, index, fuzzy, fuzzy_teams, aliases):
-    """Token -> team dict or None, widening only as far as it stays unambiguous."""
+SPORT_HINTS = {
+    "cfb": ("ncaaf", "cfb", "college football"),
+    "nfl": ("nfl",),
+    "nba": ("nba", "basketball"),
+    "ncaab": ("ncaab", "college basketball"),
+    "wnba": ("wnba",),
+    "nhl": ("nhl", "hockey"),
+    "mlb": ("mlb", "baseball"),
+    "mls": ("mls",),
+    "epl": ("epl", "premier league"),
+    "ucl": ("ucl", "champions league"),
+}
+
+
+def hinted_leagues(text):
+    """Leagues whose name or sport is mentioned in a category or channel label."""
+    lowered = (text or "").lower()
+    hinted = {lk for lk, words in SPORT_HINTS.items() if any(w in lowered for w in words)}
+    # A label naming college basketball should not also point at the NBA.
+    if "college basketball" in lowered or "ncaab" in lowered:
+        hinted.discard("nba")
+    if "college football" in lowered or "ncaaf" in lowered:
+        hinted.discard("nfl")
+    return hinted
+
+
+def resolve_team_quality(token, index, fuzzy, fuzzy_teams, aliases):
+    """Token -> (team, rank). A lower rank means a more literal match.
+
+    Rank 0 is an abbreviation really present in that league's index, 1 a prefix
+    expansion, 2 a fuzzy guess, 3 a seeded alias. Without this distinction a
+    college index holding thousands of aliases ties with a thirty-team league and
+    then wins on table order.
+    """
     key = norm(aliases.get(norm(token), token))
     if not key:
-        return None
+        return None, 9
     if key in index:
-        return index[key][0]
+        return index[key][0], 0
 
     # Provider shorthand is often a prefix of the ESPN key: BUFF -> BUF/BUFFALO.
     # Only accept it when every expansion belongs to a single team.
@@ -524,17 +562,42 @@ def resolve_team(token, index, fuzzy, fuzzy_teams, aliases):
                 for team in teams:
                     loose[team.get("id")] = team
         if len(loose) == 1:
-            return next(iter(loose.values()))
+            return next(iter(loose.values())), 1
 
     if fuzzy:
         near = difflib.get_close_matches(key, fuzzy, n=1, cutoff=0.82)
         if near:
-            return fuzzy_teams[near[0]]
+            return fuzzy_teams[near[0]], 2
 
     mapped = DEFAULT_ALIASES.get(key)
     if mapped and mapped in index:
-        return index[mapped][0]
-    return None
+        return index[mapped][0], 3
+    return None, 9
+
+
+def resolve_team(token, index, fuzzy, fuzzy_teams, aliases):
+    """Token -> team dict or None, widening only as far as it stays unambiguous."""
+    team, _rank = resolve_team_quality(token, index, fuzzy, fuzzy_teams, aliases)
+    return team
+
+
+def rank_leagues(hits_by_league, ranks, per_league, hinted=frozenset()):
+    """Candidate leagues for one channel, best fit first.
+
+    Two leagues can legitimately own the same abbreviations - SF @ SEA is both the
+    Giants/Mariners and the 49ers/Seahawks - and choosing by table order is
+    arbitrary, worst of all with college football first: its index carries
+    thousands of aliases, so it matches loosely where a professional league
+    matches exactly. An exact abbreviation wins over a loose one, then a league the
+    channel's own category names, then the tighter index, then a stable name order.
+    """
+    def sort_key(league_key):
+        return (ranks.get(league_key, 9),
+                0 if league_key in hinted else 1,
+                len(per_league[league_key][0]),
+                league_key)
+
+    return sorted(hits_by_league, key=sort_key)
 
 
 def resolve_league_selection(value):
@@ -903,19 +966,28 @@ def main(argv=None):
 
     for ch, left, right in candidates:
         found, reason = None, None
+        hits_by_league, ranks = {}, {}
+        hint = hinted_leagues((ch.get("attrs", {}).get("group-title") or "") + " " + ch["name"])
 
         for league_key, (index, fuzzy, fuzzy_teams) in per_league.items():
-            team_a = resolve_team(left, index, fuzzy, fuzzy_teams, aliases)
-            team_b = resolve_team(right, index, fuzzy, fuzzy_teams, aliases)
-            if not team_a or not team_b:
+            team_a, rank_a = resolve_team_quality(left, index, fuzzy, fuzzy_teams, aliases)
+            team_b, rank_b = resolve_team_quality(right, index, fuzzy, fuzzy_teams, aliases)
+            if not team_a or not team_b or team_a["id"] == team_b["id"]:
                 continue
             hits = match_events(team_a, team_b, events)
             if hits:
-                found = (league_key, hits)
-                break
-            if reason is None:
+                hits_by_league[league_key] = hits
+                ranks[league_key] = rank_a + rank_b
+            elif reason is None:
                 reason = "no %s event for %s vs %s in window" % (
                     league_key.upper(), team_a.get("abbreviation"), team_b.get("abbreviation"))
+
+        if hits_by_league:
+            ordered = rank_leagues(hits_by_league, ranks, per_league, hint)
+            if len(ordered) > 1:
+                log("  ! %s: %s all have an event - using %s"
+                    % (ch["name"], ", ".join(ordered), ordered[0]))
+            found = (ordered[0], hits_by_league[ordered[0]])
 
         if not found:
             if reason is None:
@@ -1279,6 +1351,51 @@ def test_league_inference():
         check(True, "an unknown league is rejected")
 
 
+def test_league_tiebreak():
+    """A cross-league collision must not be decided by table order."""
+    print("== cross-league tie-break ==")
+
+    def league_index(pairs):
+        index, by_abbr = {}, {}
+        for abbr, team_id in pairs.items():
+            team = {"id": team_id, "abbreviation": abbr}
+            index[abbr] = [team]
+            by_abbr[abbr] = team
+        return index, list(by_abbr), by_abbr
+
+    # Ranks 2 versus 0 below stand for a loose college guess against exact pro hits.
+    college = {"TEAM%d" % i: "c%d" % i for i in range(300)}
+    college["MILWAUKEE"] = "cfb-milw"
+    per_league = {
+        "cfb": league_index(college),
+        "nfl": league_index({"SF": "nfl-sf", "SEA": "nfl-sea"}),
+        "mlb": league_index({"SF": "mlb-sf", "SEA": "mlb-sea"}),
+    }
+    hits = {"cfb": [1], "nfl": [1], "mlb": [1]}
+
+    ordered = tg.rank_leagues(hits, {"cfb": 2, "nfl": 0, "mlb": 0}, per_league)
+    check(ordered[-1] == "cfb", "a loose college match loses to exact ones", str(ordered))
+
+    ordered = tg.rank_leagues(hits, {"cfb": 9, "nfl": 0, "mlb": 0}, per_league,
+                              tg.hinted_leagues("MLB"))
+    check(ordered[0] == "mlb", "a category naming the league wins the tie", str(ordered))
+
+    check(tg.hinted_leagues("Baseball") == {"mlb"},
+          "a 'Baseball' category resolves to MLB")
+    check(tg.hinted_leagues("Live Events") == set(),
+          "an uninformative category hints nothing")
+    hinted = tg.hinted_leagues("College Basketball")
+    check("ncaab" in hinted and "nba" not in hinted,
+          "college basketball does not point at the NBA", str(hinted))
+
+    team, rank = tg.resolve_team_quality("SF", per_league["nfl"][0],
+                                         per_league["nfl"][1], per_league["nfl"][2], {})
+    check(rank == 0 and team["id"] == "nfl-sf", "an exact abbreviation ranks 0")
+    team, rank = tg.resolve_team_quality("MILW", per_league["cfb"][0],
+                                         per_league["cfb"][1], per_league["cfb"][2], {})
+    check(rank == 1 and team["id"] == "cfb-milw", "a prefix expansion ranks 1", str(rank))
+
+
 def test_xtream():
     """Xtream mapping, using canned API payloads so no credentials are needed."""
     print("== xtream mapping ==")
@@ -1478,6 +1595,7 @@ def main():
     test_naming()
     test_slot_ids()
     test_league_inference()
+    test_league_tiebreak()
     test_xtream()
 
     print()
@@ -1607,6 +1725,10 @@ Pages rebuilds only when something actually changed.
 
 - **It enhances; it does not replace.** The provider's guide remains the source
   for every channel that is not an event channel.
+- **A name-only channel can still be ambiguous.** When two leagues have a game for
+  the same pairing on the same day and the category says nothing useful, one of
+  them has to win: the tool prefers the literal match and logs the conflict rather
+  than pretending the choice was certain.
 - **ESPN is the only sport source.** Leagues it does not carry cannot be
   resolved, and the tool leaves those channels untouched rather than guessing.
 - **Only the guide is hosted.** The playlist is generated locally when needed
@@ -1640,7 +1762,7 @@ stale and must be regenerated rather than edited.
 
 | File | Bytes | SHA-256 (first 16) |
 | --- | --- | --- |
-| `teamguide.py` | 32529 | `8d7f969995e3a0ec` |
+| `teamguide.py` | 35364 | `ffe03f4d8c12bfba` |
 | `.github/workflows/guide.yml` | 6474 | `71eb73502795afc7` |
-| `test/smoke.py` | 14778 | `9495bb3f6701097f` |
+| `test/smoke.py` | 16924 | `2d647e13e99f4153` |
 | `.gitignore` | 232 | `05c7ad361ccd3924` |

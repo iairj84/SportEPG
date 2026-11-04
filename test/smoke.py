@@ -121,6 +121,51 @@ def test_league_inference():
         check(True, "an unknown league is rejected")
 
 
+def test_league_tiebreak():
+    """A cross-league collision must not be decided by table order."""
+    print("== cross-league tie-break ==")
+
+    def league_index(pairs):
+        index, by_abbr = {}, {}
+        for abbr, team_id in pairs.items():
+            team = {"id": team_id, "abbreviation": abbr}
+            index[abbr] = [team]
+            by_abbr[abbr] = team
+        return index, list(by_abbr), by_abbr
+
+    # Ranks 2 versus 0 below stand for a loose college guess against exact pro hits.
+    college = {"TEAM%d" % i: "c%d" % i for i in range(300)}
+    college["MILWAUKEE"] = "cfb-milw"
+    per_league = {
+        "cfb": league_index(college),
+        "nfl": league_index({"SF": "nfl-sf", "SEA": "nfl-sea"}),
+        "mlb": league_index({"SF": "mlb-sf", "SEA": "mlb-sea"}),
+    }
+    hits = {"cfb": [1], "nfl": [1], "mlb": [1]}
+
+    ordered = tg.rank_leagues(hits, {"cfb": 2, "nfl": 0, "mlb": 0}, per_league)
+    check(ordered[-1] == "cfb", "a loose college match loses to exact ones", str(ordered))
+
+    ordered = tg.rank_leagues(hits, {"cfb": 9, "nfl": 0, "mlb": 0}, per_league,
+                              tg.hinted_leagues("MLB"))
+    check(ordered[0] == "mlb", "a category naming the league wins the tie", str(ordered))
+
+    check(tg.hinted_leagues("Baseball") == {"mlb"},
+          "a 'Baseball' category resolves to MLB")
+    check(tg.hinted_leagues("Live Events") == set(),
+          "an uninformative category hints nothing")
+    hinted = tg.hinted_leagues("College Basketball")
+    check("ncaab" in hinted and "nba" not in hinted,
+          "college basketball does not point at the NBA", str(hinted))
+
+    team, rank = tg.resolve_team_quality("SF", per_league["nfl"][0],
+                                         per_league["nfl"][1], per_league["nfl"][2], {})
+    check(rank == 0 and team["id"] == "nfl-sf", "an exact abbreviation ranks 0")
+    team, rank = tg.resolve_team_quality("MILW", per_league["cfb"][0],
+                                         per_league["cfb"][1], per_league["cfb"][2], {})
+    check(rank == 1 and team["id"] == "cfb-milw", "a prefix expansion ranks 1", str(rank))
+
+
 def test_xtream():
     """Xtream mapping, using canned API payloads so no credentials are needed."""
     print("== xtream mapping ==")
@@ -320,6 +365,7 @@ def main():
     test_naming()
     test_slot_ids()
     test_league_inference()
+    test_league_tiebreak()
     test_xtream()
 
     print()
