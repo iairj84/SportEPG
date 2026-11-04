@@ -23,7 +23,7 @@ python3 teamguide.py --m3u 'http://provider/get.php?username=...&password=...&ty
 # write out/guide.xml and out/playlist.m3u
 python3 teamguide.py --m3u 'http://provider/...m3u_plus' \
                      --merge 'http://provider/xmltv.php?...' \
-                     --out-dir out --days-ahead 14
+                     --out-dir out --days-ahead 2
 ```
 
 `--merge` is optional but recommended: it takes the provider's own XMLTV as the
@@ -39,7 +39,7 @@ covers your whole lineup.
 | `--merge` | off | provider XMLTV to merge and correct |
 | `--out-dir` | `out` | where `guide.xml` / `playlist.m3u` go |
 | `--leagues` | `auto` (inferred from the channels) | `auto`, `all`, or a list of `cfb nfl nba ncaab wnba nhl mlb mls epl ucl` |
-| `--days-back` / `--days-ahead` | `2` / `14` | event window |
+| `--days-back` / `--days-ahead` | `1` / `2` | event window; a slot only airs the game it is named for |
 | `--aliases` | none | JSON `{"BAMA": "ALA"}` for provider-specific shorthand |
 | `--no-m3u` | off | don't write the rewritten playlist |
 | `--dry-run` | off | report matches only |
