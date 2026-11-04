@@ -75,6 +75,52 @@ def test_naming():
     check(tg.resolve_team("ZZZ", index, [], {}, {}) is None, "unknown token stays unresolved")
 
 
+def test_league_inference():
+    """Only leagues that can host a matchup should be fetched."""
+    print("== league inference ==")
+
+    def league_index(teams):
+        index, teams_by_abbr = {}, {}
+        for abbr, team_id in teams.items():
+            team = {"id": team_id, "abbreviation": abbr}
+            index[abbr] = [team]
+            teams_by_abbr[abbr] = team
+        return index, list(teams_by_abbr), teams_by_abbr
+
+    per_league = {
+        "nba": league_index({"BOS": "1", "NYK": "2"}),
+        "nhl": league_index({"BOS": "3", "TOR": "4"}),
+        "mlb": league_index({"NYY": "5", "BAL": "6"}),
+    }
+    channel = {"attrs": {}, "name": "B01: 7:30pm BOS @ NYK"}
+
+    check(tg.infer_leagues([(channel, "BOS", "NYK")], per_league, {}) == ["nba"],
+          "shared abbreviation narrows to one league (BOS @ NYK -> nba)",
+          str(tg.infer_leagues([(channel, "BOS", "NYK")], per_league, {})))
+    check(tg.infer_leagues([(channel, "BOS", "TOR")], per_league, {}) == ["nhl"],
+          "BOS @ TOR -> nhl")
+    check(tg.infer_leagues([(channel, "NYY", "BAL")], per_league, {}) == ["mlb"],
+          "NYY @ BAL -> mlb")
+    check(tg.infer_leagues([(channel, "ZZZ", "QQQ")], per_league, {}) == [],
+          "unresolvable matchup infers no league")
+    both = tg.infer_leagues([(channel, "BOS", "NYK"), (channel, "BOS", "TOR")],
+                            per_league, {})
+    check(both == ["nba", "nhl"], "several matchups union their leagues", str(both))
+    check(tg.infer_leagues([(channel, "NYK", "BRK")], per_league, {}) == [],
+          "one unresolved token infers nothing")
+
+    check(tg.resolve_league_selection("auto") == list(tg.LEAGUES),
+          "auto builds the index for every league")
+    check(tg.resolve_league_selection("all") == list(tg.LEAGUES), "all == auto")
+    check(tg.resolve_league_selection("nba,nhl") == ["nba", "nhl"],
+          "an explicit league list is honoured")
+    try:
+        tg.resolve_league_selection("nba,curling")
+        check(False, "an unknown league is rejected")
+    except SystemExit:
+        check(True, "an unknown league is rejected")
+
+
 def test_xtream():
     """Xtream mapping, using canned API payloads so no credentials are needed."""
     print("== xtream mapping ==")
@@ -273,6 +319,7 @@ def main():
 
     test_naming()
     test_slot_ids()
+    test_league_inference()
     test_xtream()
 
     print()

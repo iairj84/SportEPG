@@ -81,6 +81,14 @@ Assign once, and tomorrow's rename lands on the same id.
   holding `guide.xml` and an empty `.nojekyll`, so it never accumulates history
   and never waits on a deployment queue that can wedge. The Pages source must be
   "Deploy from a branch" on `gh-pages`; "GitHub Actions" publishes nothing.
+- The schedule runs hourly, because the provider replaces its event channels
+  once a day at a time that moves; a wider interval can leave yesterday's
+  matchup showing for hours. A run whose `guide.xml` is byte-identical to the
+  published one skips the push, so Pages only rebuilds when something changed.
+- Which leagues to fetch is inferred from the channel names, not configured. A
+  channel like `B01: 7:30pm BOS @ NYK` fetches the NBA scoreboard and `BOS @
+  TOR` the NHL one, and the category label ("Baseball" versus "MLB") never
+  matters because resolution is by team. Seasons turning over need no edit.
 - Pages on a **private** repository needs a paid plan. Public is fine here
   because the guide carries no credentials.
 - The guide still contains whatever the provider's XMLTV supplies for channels

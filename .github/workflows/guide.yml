@@ -2,8 +2,10 @@ name: EPG guide
 
 on:
   schedule:
-    # Every six hours, offset off the hour so we are not in the busy window.
-    - cron: "17 */6 * * *"
+    # The provider replaces its event channels once a day at a time that moves,
+    # so this polls hourly. A run whose guide is unchanged does not republish,
+    # which keeps the extra runs from turning into extra Pages builds.
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -40,8 +42,10 @@ jobs:
           test -n "$XTREAM_HOST" || { echo "::error::missing secret XTREAM_HOST"; exit 1; }
           test -n "$XTREAM_USER" || { echo "::error::missing secret XTREAM_USER"; exit 1; }
           test -n "$XTREAM_PASS" || { echo "::error::missing secret XTREAM_PASS"; exit 1; }
-          # --no-m3u is not optional here: the playlist embeds the provider
-          # username and password in every stream URL and must never be published.
+          # No --leagues here on purpose: the tool infers them from the channels,
+          # so a season change or a relabelled provider category needs no edit.
+          # --no-m3u is not optional: the playlist embeds the provider username
+          # and password in every stream URL and must never be published.
           python3 teamguide.py \
             --xtream "$XTREAM_HOST" \
             --username "$XTREAM_USER" \
@@ -95,19 +99,27 @@ jobs:
           # deployment API instead can leave a first deployment sitting in
           # progress forever, which leaves the site unpublished with no error to
           # act on. A branch push always completes.
+          url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           stage=$(mktemp -d)
-          cp out/guide.xml "$stage/guide.xml"
-          : > "$stage/.nojekyll"
           cd "$stage"
           git init -q -b gh-pages
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The schedule runs hourly to catch the provider's daily rename, so a
+          # byte-identical guide must not force a Pages rebuild every hour.
+          if git fetch -q --depth=1 "$url" gh-pages 2>/dev/null; then
+            if git show FETCH_HEAD:guide.xml > published.xml 2>/dev/null \
+               && cmp -s published.xml "$GITHUB_WORKSPACE/out/guide.xml"; then
+              echo "guide.xml is identical to the published copy - not republishing"
+              exit 0
+            fi
+          fi
+          cp "$GITHUB_WORKSPACE/out/guide.xml" guide.xml
+          : > .nojekyll
           git add --all
           git commit -q -m "guide: $(date -u +%FT%TZ)"
-          # Force: the branch holds exactly one commit, replaced on every run.
-          git push -q --force \
-            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-            gh-pages
+          # Force: the branch holds exactly one commit, replaced on every change.
+          git push -q --force "$url" gh-pages
           echo "published guide.xml to the gh-pages branch of ${GITHUB_REPOSITORY}"
 
   # GitHub disables scheduled workflows in *public* repositories after 60 days

@@ -142,7 +142,11 @@ guessed at.
 **3. Resolve per league.** This is the part that matters. A single shared index
 makes `CHI` ambiguous — it resolves to the Blackhawks on a Bulls channel. The
 index is built per league, so `CHI` inside `nhl` is only ever Chicago's hockey
-club.
+club. Which leagues are fetched at all is inferred from the channels: the index
+covers every supported league, and scoreboards are requested only for the
+leagues that can host both teams of a matchup. A provider relabelling its
+categories for the season — "Baseball" instead of "MLB" — needs no
+configuration, because nothing keys on the label.
 
 **4. Fetch ESPN per day.** The scoreboard endpoint rejects date *ranges* with
 HTTP 400; it must be queried one day at a time. Days in the past are cached for
@@ -281,16 +285,23 @@ OPERATE = """\
 
 | Task | How |
 | --- | --- |
-| Scheduled run | every six hours, `17 */6 * * *`, offset off the hour |
+| Scheduled run | hourly at `:17`; an unchanged guide is not republished |
 | Run now | Actions → EPG guide → Run workflow |
 | Change the horizon | `--days-ahead` in the workflow (default 14) |
-| Change the leagues | `--leagues` (default `cfb,nfl,nba,ncaab,nhl,mlb`) |
+| Change the leagues | `--leagues` (default `auto`: inferred from the channel names; `all` or an explicit list also work) |
 | Rotate the provider password | update the `XTREAM_PASS` secret only |
 | Add a team alias | `--aliases '{"NYK": "NY"}'`; applied only after real matching fails |
 | Diagnose a single channel | run locally against the same playlist and read the `matched channels: N / M` line |
 
 Scheduled workflows can start late — usually minutes, occasionally longer. For
 an EPG that is irrelevant; for a same-day change, dispatch manually.
+
+The schedule is hourly rather than six-hourly because the provider replaces its
+event channels once a day at a time that moves: with a wider interval a slot can
+show yesterday's matchup for hours. The extra runs are not wasteful — the team
+index is cached for a day, only the leagues a matchup can belong to are fetched,
+and a run whose `guide.xml` is byte-identical to the live one skips the push, so
+Pages rebuilds only when something actually changed.
 """
 
 TROUBLE = """\

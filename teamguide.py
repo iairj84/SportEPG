@@ -368,6 +368,44 @@ def resolve_team(token, index, fuzzy, fuzzy_teams, aliases):
     return None
 
 
+def resolve_league_selection(value):
+    """--leagues value -> the leagues to build a team index for.
+
+    "auto" (the default) and "all" both mean every league the tool knows, because
+    which leagues matter is decided from the channels themselves. A provider that
+    relabels a category for the season ("Baseball" in October, "MLB" in April)
+    changes nothing here.
+    """
+    value = (value or "auto").strip().lower()
+    if value in ("auto", "all"):
+        return list(LEAGUES)
+    keys = [k.strip().lower() for k in value.split(",") if k.strip()]
+    unknown = [k for k in keys if k not in LEAGUES]
+    if unknown:
+        raise SystemExit("unknown league(s): %s\nvalid: %s, auto, all"
+                         % (", ".join(unknown), ", ".join(sorted(LEAGUES))))
+    return keys
+
+
+def infer_leagues(candidates, per_league, aliases):
+    """Leagues worth fetching scoreboards for, from the channel names alone.
+
+    Every matchup is resolved against every league's index first, and a league is
+    only fetched when it can host *both* teams of a channel. A night of basketball
+    and hockey therefore costs two league fetches instead of ten, and nothing keys
+    on a category label, so seasonal relabelling needs no configuration.
+    """
+    needed = []
+    for _channel, left, right in candidates:
+        for league_key, (index, fuzzy, fuzzy_teams) in per_league.items():
+            team_a = resolve_team(left, index, fuzzy, fuzzy_teams, aliases)
+            team_b = resolve_team(right, index, fuzzy, fuzzy_teams, aliases)
+            if team_a and team_b and team_a["id"] != team_b["id"]:
+                if league_key not in needed:
+                    needed.append(league_key)
+    return needed
+
+
 def parse_iso(value):
     if not value:
         return None
@@ -627,8 +665,10 @@ def main(argv=None):
                     help="do not default --merge to the provider guide when using --xtream")
     ap.add_argument("--merge", default="", help="provider XMLTV URL/path to merge into the output")
     ap.add_argument("--out-dir", default="out", help="where to write guide.xml and playlist.m3u")
-    ap.add_argument("--leagues", default="cfb,nfl,nba,ncaab,nhl,mlb",
-                    help="comma list of: " + ", ".join(sorted(LEAGUES)))
+    ap.add_argument("--leagues", default="auto",
+                    help="'auto' (default) infers the leagues from the "
+                         "channel names; 'all' or a comma list of: "
+                         + ", ".join(sorted(LEAGUES)))
     ap.add_argument("--days-back", type=int, default=2)
     ap.add_argument("--days-ahead", type=int, default=14)
     ap.add_argument("--aliases", default="", help="JSON {token: espn-abbreviation}")
@@ -640,10 +680,7 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="report matches, write nothing")
     args = ap.parse_args(argv)
 
-    league_keys = [k.strip().lower() for k in args.leagues.split(",") if k.strip()]
-    unknown = [k for k in league_keys if k not in LEAGUES]
-    if unknown:
-        raise SystemExit("unknown league(s): %s\nvalid: %s" % (", ".join(unknown), ", ".join(sorted(LEAGUES))))
+    league_keys = resolve_league_selection(args.leagues)
 
     if args.xtream:
         channels, m3u_header = load_xtream(args.xtream, args.username, args.password,
@@ -674,7 +711,13 @@ def main(argv=None):
     per_league = build_team_index(league_keys, args.cache_dir)
 
     now = datetime.now(timezone.utc)
-    events = fetch_events(league_keys,
+    needed = infer_leagues(candidates, per_league, aliases)
+    log("leagues inferred from the channel names: %s"
+        % (", ".join(needed) if needed else "none"))
+    if needed and len(needed) < len(league_keys):
+        log("  skipping the scoreboards of %d irrelevant league(s)"
+            % (len(league_keys) - len(needed)))
+    events = fetch_events(needed,
                           now - timedelta(days=args.days_back),
                           now + timedelta(days=args.days_ahead),
                           args.cache_dir)

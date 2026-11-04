@@ -38,7 +38,7 @@ covers your whole lineup.
 | `--m3u` | required | playlist URL or local file |
 | `--merge` | off | provider XMLTV to merge and correct |
 | `--out-dir` | `out` | where `guide.xml` / `playlist.m3u` go |
-| `--leagues` | `cfb,nfl,nba,ncaab,nhl,mlb` | `cfb nfl nba ncaab wnba nhl mlb mls epl ucl` |
+| `--leagues` | `auto` (inferred from the channels) | `auto`, `all`, or a list of `cfb nfl nba ncaab wnba nhl mlb mls epl ucl` |
 | `--days-back` / `--days-ahead` | `2` / `14` | event window |
 | `--aliases` | none | JSON `{"BAMA": "ALA"}` for provider-specific shorthand |
 | `--no-m3u` | off | don't write the rewritten playlist |

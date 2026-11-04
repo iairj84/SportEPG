@@ -82,7 +82,11 @@ guessed at.
 **3. Resolve per league.** This is the part that matters. A single shared index
 makes `CHI` ambiguous — it resolves to the Blackhawks on a Bulls channel. The
 index is built per league, so `CHI` inside `nhl` is only ever Chicago's hockey
-club.
+club. Which leagues are fetched at all is inferred from the channels: the index
+covers every supported league, and scoreboards are requested only for the
+leagues that can host both teams of a matchup. A provider relabelling its
+categories for the season — "Baseball" instead of "MLB" — needs no
+configuration, because nothing keys on the label.
 
 **4. Fetch ESPN per day.** The scoreboard endpoint rejects date *ranges* with
 HTTP 400; it must be queried one day at a time. Days in the past are cached for
@@ -533,6 +537,44 @@ def resolve_team(token, index, fuzzy, fuzzy_teams, aliases):
     return None
 
 
+def resolve_league_selection(value):
+    """--leagues value -> the leagues to build a team index for.
+
+    "auto" (the default) and "all" both mean every league the tool knows, because
+    which leagues matter is decided from the channels themselves. A provider that
+    relabels a category for the season ("Baseball" in October, "MLB" in April)
+    changes nothing here.
+    """
+    value = (value or "auto").strip().lower()
+    if value in ("auto", "all"):
+        return list(LEAGUES)
+    keys = [k.strip().lower() for k in value.split(",") if k.strip()]
+    unknown = [k for k in keys if k not in LEAGUES]
+    if unknown:
+        raise SystemExit("unknown league(s): %s\nvalid: %s, auto, all"
+                         % (", ".join(unknown), ", ".join(sorted(LEAGUES))))
+    return keys
+
+
+def infer_leagues(candidates, per_league, aliases):
+    """Leagues worth fetching scoreboards for, from the channel names alone.
+
+    Every matchup is resolved against every league's index first, and a league is
+    only fetched when it can host *both* teams of a channel. A night of basketball
+    and hockey therefore costs two league fetches instead of ten, and nothing keys
+    on a category label, so seasonal relabelling needs no configuration.
+    """
+    needed = []
+    for _channel, left, right in candidates:
+        for league_key, (index, fuzzy, fuzzy_teams) in per_league.items():
+            team_a = resolve_team(left, index, fuzzy, fuzzy_teams, aliases)
+            team_b = resolve_team(right, index, fuzzy, fuzzy_teams, aliases)
+            if team_a and team_b and team_a["id"] != team_b["id"]:
+                if league_key not in needed:
+                    needed.append(league_key)
+    return needed
+
+
 def parse_iso(value):
     if not value:
         return None
@@ -792,8 +834,10 @@ def main(argv=None):
                     help="do not default --merge to the provider guide when using --xtream")
     ap.add_argument("--merge", default="", help="provider XMLTV URL/path to merge into the output")
     ap.add_argument("--out-dir", default="out", help="where to write guide.xml and playlist.m3u")
-    ap.add_argument("--leagues", default="cfb,nfl,nba,ncaab,nhl,mlb",
-                    help="comma list of: " + ", ".join(sorted(LEAGUES)))
+    ap.add_argument("--leagues", default="auto",
+                    help="'auto' (default) infers the leagues from the "
+                         "channel names; 'all' or a comma list of: "
+                         + ", ".join(sorted(LEAGUES)))
     ap.add_argument("--days-back", type=int, default=2)
     ap.add_argument("--days-ahead", type=int, default=14)
     ap.add_argument("--aliases", default="", help="JSON {token: espn-abbreviation}")
@@ -805,10 +849,7 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="report matches, write nothing")
     args = ap.parse_args(argv)
 
-    league_keys = [k.strip().lower() for k in args.leagues.split(",") if k.strip()]
-    unknown = [k for k in league_keys if k not in LEAGUES]
-    if unknown:
-        raise SystemExit("unknown league(s): %s\nvalid: %s" % (", ".join(unknown), ", ".join(sorted(LEAGUES))))
+    league_keys = resolve_league_selection(args.leagues)
 
     if args.xtream:
         channels, m3u_header = load_xtream(args.xtream, args.username, args.password,
@@ -839,7 +880,13 @@ def main(argv=None):
     per_league = build_team_index(league_keys, args.cache_dir)
 
     now = datetime.now(timezone.utc)
-    events = fetch_events(league_keys,
+    needed = infer_leagues(candidates, per_league, aliases)
+    log("leagues inferred from the channel names: %s"
+        % (", ".join(needed) if needed else "none"))
+    if needed and len(needed) < len(league_keys):
+        log("  skipping the scoreboards of %d irrelevant league(s)"
+            % (len(league_keys) - len(needed)))
+    events = fetch_events(needed,
                           now - timedelta(days=args.days_back),
                           now + timedelta(days=args.days_ahead),
                           args.cache_dir)
@@ -942,8 +989,10 @@ name: EPG guide
 
 on:
   schedule:
-    # Every six hours, offset off the hour so we are not in the busy window.
-    - cron: "17 */6 * * *"
+    # The provider replaces its event channels once a day at a time that moves,
+    # so this polls hourly. A run whose guide is unchanged does not republish,
+    # which keeps the extra runs from turning into extra Pages builds.
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -980,8 +1029,10 @@ jobs:
           test -n "$XTREAM_HOST" || { echo "::error::missing secret XTREAM_HOST"; exit 1; }
           test -n "$XTREAM_USER" || { echo "::error::missing secret XTREAM_USER"; exit 1; }
           test -n "$XTREAM_PASS" || { echo "::error::missing secret XTREAM_PASS"; exit 1; }
-          # --no-m3u is not optional here: the playlist embeds the provider
-          # username and password in every stream URL and must never be published.
+          # No --leagues here on purpose: the tool infers them from the channels,
+          # so a season change or a relabelled provider category needs no edit.
+          # --no-m3u is not optional: the playlist embeds the provider username
+          # and password in every stream URL and must never be published.
           python3 teamguide.py \
             --xtream "$XTREAM_HOST" \
             --username "$XTREAM_USER" \
@@ -1035,19 +1086,27 @@ jobs:
           # deployment API instead can leave a first deployment sitting in
           # progress forever, which leaves the site unpublished with no error to
           # act on. A branch push always completes.
+          url="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           stage=$(mktemp -d)
-          cp out/guide.xml "$stage/guide.xml"
-          : > "$stage/.nojekyll"
           cd "$stage"
           git init -q -b gh-pages
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The schedule runs hourly to catch the provider's daily rename, so a
+          # byte-identical guide must not force a Pages rebuild every hour.
+          if git fetch -q --depth=1 "$url" gh-pages 2>/dev/null; then
+            if git show FETCH_HEAD:guide.xml > published.xml 2>/dev/null \
+               && cmp -s published.xml "$GITHUB_WORKSPACE/out/guide.xml"; then
+              echo "guide.xml is identical to the published copy - not republishing"
+              exit 0
+            fi
+          fi
+          cp "$GITHUB_WORKSPACE/out/guide.xml" guide.xml
+          : > .nojekyll
           git add --all
           git commit -q -m "guide: $(date -u +%FT%TZ)"
-          # Force: the branch holds exactly one commit, replaced on every run.
-          git push -q --force \
-            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-            gh-pages
+          # Force: the branch holds exactly one commit, replaced on every change.
+          git push -q --force "$url" gh-pages
           echo "published guide.xml to the gh-pages branch of ${GITHUB_REPOSITORY}"
 
   # GitHub disables scheduled workflows in *public* repositories after 60 days
@@ -1166,6 +1225,52 @@ def test_naming():
     check(tg.resolve_team("BRK", index, [], {}, {})["id"] == "2", "alias: BRK -> BKN")
     check(tg.resolve_team("OKL", index, [], {}, {})["id"] == "3", "alias: OKL -> OKC")
     check(tg.resolve_team("ZZZ", index, [], {}, {}) is None, "unknown token stays unresolved")
+
+
+def test_league_inference():
+    """Only leagues that can host a matchup should be fetched."""
+    print("== league inference ==")
+
+    def league_index(teams):
+        index, teams_by_abbr = {}, {}
+        for abbr, team_id in teams.items():
+            team = {"id": team_id, "abbreviation": abbr}
+            index[abbr] = [team]
+            teams_by_abbr[abbr] = team
+        return index, list(teams_by_abbr), teams_by_abbr
+
+    per_league = {
+        "nba": league_index({"BOS": "1", "NYK": "2"}),
+        "nhl": league_index({"BOS": "3", "TOR": "4"}),
+        "mlb": league_index({"NYY": "5", "BAL": "6"}),
+    }
+    channel = {"attrs": {}, "name": "B01: 7:30pm BOS @ NYK"}
+
+    check(tg.infer_leagues([(channel, "BOS", "NYK")], per_league, {}) == ["nba"],
+          "shared abbreviation narrows to one league (BOS @ NYK -> nba)",
+          str(tg.infer_leagues([(channel, "BOS", "NYK")], per_league, {})))
+    check(tg.infer_leagues([(channel, "BOS", "TOR")], per_league, {}) == ["nhl"],
+          "BOS @ TOR -> nhl")
+    check(tg.infer_leagues([(channel, "NYY", "BAL")], per_league, {}) == ["mlb"],
+          "NYY @ BAL -> mlb")
+    check(tg.infer_leagues([(channel, "ZZZ", "QQQ")], per_league, {}) == [],
+          "unresolvable matchup infers no league")
+    both = tg.infer_leagues([(channel, "BOS", "NYK"), (channel, "BOS", "TOR")],
+                            per_league, {})
+    check(both == ["nba", "nhl"], "several matchups union their leagues", str(both))
+    check(tg.infer_leagues([(channel, "NYK", "BRK")], per_league, {}) == [],
+          "one unresolved token infers nothing")
+
+    check(tg.resolve_league_selection("auto") == list(tg.LEAGUES),
+          "auto builds the index for every league")
+    check(tg.resolve_league_selection("all") == list(tg.LEAGUES), "all == auto")
+    check(tg.resolve_league_selection("nba,nhl") == ["nba", "nhl"],
+          "an explicit league list is honoured")
+    try:
+        tg.resolve_league_selection("nba,curling")
+        check(False, "an unknown league is rejected")
+    except SystemExit:
+        check(True, "an unknown league is rejected")
 
 
 def test_xtream():
@@ -1366,6 +1471,7 @@ def main():
 
     test_naming()
     test_slot_ids()
+    test_league_inference()
     test_xtream()
 
     print()
@@ -1460,16 +1566,23 @@ never overridden by a slot code.
 
 | Task | How |
 | --- | --- |
-| Scheduled run | every six hours, `17 */6 * * *`, offset off the hour |
+| Scheduled run | hourly at `:17`; an unchanged guide is not republished |
 | Run now | Actions → EPG guide → Run workflow |
 | Change the horizon | `--days-ahead` in the workflow (default 14) |
-| Change the leagues | `--leagues` (default `cfb,nfl,nba,ncaab,nhl,mlb`) |
+| Change the leagues | `--leagues` (default `auto`: inferred from the channel names; `all` or an explicit list also work) |
 | Rotate the provider password | update the `XTREAM_PASS` secret only |
 | Add a team alias | `--aliases '{"NYK": "NY"}'`; applied only after real matching fails |
 | Diagnose a single channel | run locally against the same playlist and read the `matched channels: N / M` line |
 
 Scheduled workflows can start late — usually minutes, occasionally longer. For
 an EPG that is irrelevant; for a same-day change, dispatch manually.
+
+The schedule is hourly rather than six-hourly because the provider replaces its
+event channels once a day at a time that moves: with a wider interval a slot can
+show yesterday's matchup for hours. The extra runs are not wasteful — the team
+index is cached for a day, only the leagues a matchup can belong to are fetched,
+and a run whose `guide.xml` is byte-identical to the live one skips the push, so
+Pages rebuilds only when something actually changed.
 
 ## Troubleshooting
 
@@ -1521,7 +1634,7 @@ stale and must be regenerated rather than edited.
 
 | File | Bytes | SHA-256 (first 16) |
 | --- | --- | --- |
-| `teamguide.py` | 30154 | `e5d828f37be1827b` |
-| `.github/workflows/guide.yml` | 5654 | `043d22346e1b9660` |
-| `test/smoke.py` | 12639 | `5b2f6799023cbd8c` |
+| `teamguide.py` | 32089 | `5874e908f449b91f` |
+| `.github/workflows/guide.yml` | 6474 | `71eb73502795afc7` |
+| `test/smoke.py` | 14778 | `9495bb3f6701097f` |
 | `.gitignore` | 232 | `05c7ad361ccd3924` |
